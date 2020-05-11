@@ -8,6 +8,7 @@ class Agent(object):
     def __init__(self,
         dqn,
         target_dqn,
+        v_network,
         replay_buffer,
         n_actions,
         input_shape=(84, 84),
@@ -43,6 +44,7 @@ class Agent(object):
 
         self.DQN = dqn
         self.target_dqn = target_dqn
+        self.v_network = v_network
 
     def calc_epsilon(self, frame_number, evaluation=False):
         if evaluation:
@@ -82,19 +84,22 @@ class Agent(object):
             importance = importance ** (1-self.calc_epsilon(frame_number))
         else:
             states, actions, rewards, new_states, terminal_flags = self.replay_buffer.get_minibatch(batch_size=self.batch_size, priority_scale=priority_scale)
+        v_values = self.v_network.predict(new_states)
         arg_q_max = self.DQN.predict(new_states).argmax(axis=1)
         future_q_vals = self.target_dqn.predict(new_states)
         double_q = future_q_vals[range(batch_size), arg_q_max]
 
         target_q = rewards + (gamma*double_q * (1- terminal_flags))
+        self.v_network.fit(states, target_q, verbose=0)
+        created_values = self.v_network.predict(new_states)
 
         with tf.GradientTape() as tape:
             q_values = self.DQN(states)
             one_hot_actions = tf.keras.utils.to_categorical(actions, self.n_actions, dtype=np.float32)
             Q = tf.reduce_sum(tf.multiply(q_values, one_hot_actions), axis=1)
 
-            error = Q - target_q
-            loss = tf.keras.losses.Huber()(target_q, Q)
+            error = Q - created_values
+            loss = tf.keras.losses.Huber()(created_values, Q)
             if self.use_per:
                 loss = tf.reduce_sum(loss * importance)
         model_gradients = tape.gradient(loss, self.DQN.trainable_variables)

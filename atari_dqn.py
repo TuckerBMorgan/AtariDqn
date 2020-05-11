@@ -38,7 +38,20 @@ UPDATE_FREQ = 4
 INPUT_SHAPE = (84, 84)
 BATCH_SIZE = 32
 LEARNING_RATE = 0.000001
-
+#let us create an actor critic version of this, should not be THAT hard
+def build_v_network(learning_rate=0.00001, input_shape=(84, 84), history_length=4):
+    model_input = Input(shape=(input_shape[0], input_shape[1], history_length))
+    x = Lambda(lambda  layer : layer / 255)(model_input)
+    x = Conv2D(32, (8, 8), strides=4, kernel_initializer=VarianceScaling(scale=.2), activation='relu', use_bias=False)(x)
+    x = Conv2D(64, (4, 4), strides=2, kernel_initializer=VarianceScaling(scale=.2), activation='relu', use_bias=False)(x)
+    x = Conv2D(64, (3, 3), strides=1, kernel_initializer=VarianceScaling(scale=.2), activation='relu', use_bias=False)(x)
+    x = Conv2D(1024, (7, 7), strides=1, kernel_initializer=VarianceScaling(scale=.2), activation='relu', use_bias=False)(x)
+    x = Flatten()(x)
+    x = Dense(1, kernel_initializer=VarianceScaling(scale=2.0))(x)
+    model = Model(model_input, x)
+    model.compile(Adam(learning_rate), loss=tf.keras.losses.Huber())
+    return model
+    
 def build_q_network(n_actions, learning_rate=0.00001, input_shape=(84, 84), history_length=4):
     model_input = Input(shape=(input_shape[0], input_shape[1], history_length))
     x = Lambda(lambda  layer : layer / 255)(model_input)
@@ -62,8 +75,9 @@ def build_q_network(n_actions, learning_rate=0.00001, input_shape=(84, 84), hist
 game_wrapper = GameWrapper(ENV_NAME, MAX_NOOP_STEPS)
 network = build_q_network(game_wrapper.env.action_space.n)
 target_network = build_q_network(game_wrapper.env.action_space.n)
+v_network = build_v_network()
 memory = ReplayBuffer(size=MEM_SIZE, input_shape=INPUT_SHAPE, use_per=USE_PER)
-agent = Agent(network, target_network, memory, 4, input_shape=INPUT_SHAPE, batch_size=BATCH_SIZE, use_per=USE_PER)
+agent = Agent(network, target_network, v_network, memory, 4, input_shape=INPUT_SHAPE, batch_size=BATCH_SIZE, use_per=USE_PER)
 if LOAD_FROM is None:
     frame_number = 0
     rewards = []
