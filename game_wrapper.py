@@ -20,7 +20,6 @@ class GameWrapper:
         if evaluation:
             for _ in range(random.randint(0, self.no_op_steps)):
                 self.env.step(1)
-        print(self.frame.shape)
         self.state = np.repeat(process_frame(self.frame), self.history_length, axis=2)
 
     def step(self, action, render_mode=None):

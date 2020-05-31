@@ -1,7 +1,13 @@
 import os
 import random
 import numpy as np
-
+class Memory:
+    def __init__(self, action, frame, reward, terminal, clip_reward=True):
+        self.action = action
+        self.frame = frame
+        self.reward = reward
+        self.terminal = terminal
+        self.clip_reward = clip_reward
 class ReplayBuffer:
     def __init__(self, size=10, input_shape=(84, 84), history_length=4, use_per=True):
         self.size = size
@@ -18,15 +24,15 @@ class ReplayBuffer:
 
         self.use_per = use_per
     
-    def add_experience(self, action, frame, reward, terminal, clip_reward=True):
-        if frame.shape != self.input_shape:
+    def add_experience(self, memory):
+        if memory.frame.shape != self.input_shape:
             raise ValueError('Dimensions of frame is wrong')
-        if clip_reward:
-            reward = np.sign(reward)
-        self.actions[self.current] = action
-        self.frames[self.current, ...] = frame
-        self.rewards[self.current] = reward
-        self.terminal_flags[self.current] = terminal
+        if memory.clip_reward:
+            reward = np.sign(memory.reward)
+        self.actions[self.current] = memory.action
+        self.frames[self.current, ...] = memory.frame
+        self.rewards[self.current] = memory.reward
+        self.terminal_flags[self.current] = memory.terminal
         self.priorities[self.current] = max(self.priorities.max(), 1)
         self.count = max(self.count, self.current + 1)
         self.current = (self.current + 1) % self.size
@@ -84,3 +90,5 @@ class ReplayBuffer:
         self.frames = np.load(folder_name + '/frames.npy')
         self.rewards = np.load(folder_name + '/rewards.npy')
         self.terminal_flags = np.load(folder_name + '/terminal_flags.npy')  
+    def faux_len(self):
+        return self.current

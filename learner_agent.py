@@ -4,12 +4,11 @@ import os
 import numpy as np
 import tensorflow as tf
 
-class Agent(object):
+class LearnerAgent(object):
     def __init__(self,
         dqn,
         target_dqn,
         v_network,
-        replay_buffer,
         n_actions,
         input_shape=(84, 84),
         batch_size=32,
@@ -26,11 +25,9 @@ class Agent(object):
         self.input_shape = input_shape
         self.history_length = history_length
 
-
         self.replay_buffer_start_size = replay_buffer_start_size
         self.max_frames = max_frames
         self.batch_size = batch_size
-        self.replay_buffer = replay_buffer
         self.use_per = use_per
         self.eps_evaluation = eps_evaluation
         self.eps_initial = eps_initial
@@ -56,11 +53,17 @@ class Agent(object):
         elif frame_number >= self.replay_buffer_start_size + self.eps_annealing_frames:
             return self.slope_2*frame_number + self.intercept_2
     
-    def get_action(self, frame_number, state, evaluation=False):
+    def get_action(self, frame_number, state, evaluation=False, give_q=False):
         eps = self.calc_epsilon(frame_number, evaluation)
+        q_value = self.v_network.predict(state.reshape((-1, self.input_shape[0], self.input_shape[1], self.history_length)))[0]
         if np.random.rand(1) < eps:
-            return np.random.randint(0, self.n_actions)
+            if give_q:
+                return np.random.randint(0, self.n_actions), q_value
+            else:
+                return np.random.randint(0, self.n_actions)
         q_vals = self.DQN.predict(state.reshape((-1, self.input_shape[0], self.input_shape[1], self.history_length)))[0]
+        if give_q:
+            return q_vals.argmax(), q_value
         return q_vals.argmax()
     def get_intermeditate_representation(self, state, layer_names=None, stack_state=True):
         if isinstance(layer_names, list) or isinstance(layer_names, tuple):
@@ -76,57 +79,48 @@ class Agent(object):
         return temp_model.predict(state.reshape((-1, self.input_shape[0], self.input_shape[1], self.history_length)))
     def update_target_network(self):
         self.target_dqn.set_weights(self.DQN.get_weights())
-    def add_experience(self, action, frame, reward, terminal, clip_reward=True):
-        self.replay_buffer.add_experience(action, frame, reward, terminal, clip_reward)
+    
     def learn(self, batch_size, gamma, frame_number, priority_scale=1.0):
         if self.use_per:
             (states, actions, reward, new_states, terminal_flags), importance, indices = self.replay_buffer.get_minibatch(batch_size=self.batch_size, priority_scale=priority_scale)
             importance = importance ** (1-self.calc_epsilon(frame_number))
         else:
             states, actions, rewards, new_states, terminal_flags = self.replay_buffer.get_minibatch(batch_size=self.batch_size, priority_scale=priority_scale)
-        v_values = self.v_network.predict(new_states)
+        
         arg_q_max = self.DQN.predict(new_states).argmax(axis=1)
         future_q_vals = self.target_dqn.predict(new_states)
         double_q = future_q_vals[range(batch_size), arg_q_max]
-
         target_q = rewards + (gamma*double_q * (1- terminal_flags))
         self.v_network.fit(states, target_q, verbose=0)
-        created_values = self.v_network.predict(new_states)
+
 
         with tf.GradientTape() as tape:
             q_values = self.DQN(states)
             one_hot_actions = tf.keras.utils.to_categorical(actions, self.n_actions, dtype=np.float32)
             Q = tf.reduce_sum(tf.multiply(q_values, one_hot_actions), axis=1)
 
-            error = Q - created_values
-            loss = tf.keras.losses.Huber()(created_values, Q)
+            error = Q - target_q
+            loss = tf.keras.losses.Huber()(target_q, Q)
             if self.use_per:
                 loss = tf.reduce_sum(loss * importance)
         model_gradients = tape.gradient(loss, self.DQN.trainable_variables)
         self.DQN.optimizer.apply_gradients(zip(model_gradients, self.DQN.trainable_variables))
-        if self.use_per:
-            self.replay_buffer.set_priorities(indices, error)
         return float(loss.numpy()), error
+    
     def save(self, folder_name, **kwargs):
         if not os.path.isdir(folder_name):
             os.makedirs(folder_name)
         self.DQN.save(folder_name + "/dqn.h5")
+        self.v_network.save(folder_name + "/v.h5")
         self.target_dqn.save(folder_name + "/target_dqn.h5")
-        self.replay_buffer.save(folder_name + "/replay-buffer")
-        with open(folder_name + '/meta.json', 'w+') as f:
-            f.write(json.dumps({**{'buff_count': self.replay_buffer.count, 'buff_curr': self.replay_buffer.current}, **kwargs}))
     def load(self, folder_name, load_replay_buffer=True):
         if not os.path.isdir(folder_name):
             raise ValueError(f'{folder_name} is not valid directoy')
         self.DQN = tf.keras.models.load_model(folder_name + '/dqn.h5')
+        self.v_network = tf.keras.models.load_model(folder_name + '/v.h5')
         self.target_dqn = tf.keras.models.load_model(folder_name + '/target_dqn.h5')
-        self.optimzer = self.DQN.optimzer
-        if load_replay_buffer:
-            self.replay_buffer.load(folder_name + '/replay-buffer')
+        #self.optimzer = self.DQN.optimzer
         with open(folder_name + "/meta.json", 'r') as f:
             meta = json.load(f)
-        if load_replay_buffer:
-            self.replay_buffer.count = meta['buff_count']
-            self.replay_buffer.current = meta['buff_curr']
         del meta['buff_count'], meta['buff_curr']
         return meta
