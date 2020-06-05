@@ -80,12 +80,12 @@ class LearnerAgent(object):
     def update_target_network(self):
         self.target_dqn.set_weights(self.DQN.get_weights())
     
-    def learn(self, batch_size, gamma, frame_number, priority_scale=1.0):
+    def learn(self, memory_bundle, batch_size, gamma, frame_number, priority_scale=1.0):
         if self.use_per:
-            (states, actions, reward, new_states, terminal_flags), importance, indices = self.replay_buffer.get_minibatch(batch_size=self.batch_size, priority_scale=priority_scale)
+            (states, actions, reward, new_states, terminal_flags), importance, indices = memory_bundle
             importance = importance ** (1-self.calc_epsilon(frame_number))
         else:
-            states, actions, rewards, new_states, terminal_flags = self.replay_buffer.get_minibatch(batch_size=self.batch_size, priority_scale=priority_scale)
+            states, actions, rewards, new_states, terminal_flags = memory_bundle #self.replay_buffer.get_minibatch(batch_size=self.batch_size, priority_scale=priority_scale)
         
         arg_q_max = self.DQN.predict(new_states).argmax(axis=1)
         future_q_vals = self.target_dqn.predict(new_states)

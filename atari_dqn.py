@@ -77,14 +77,17 @@ target_networks = []
 v_network = []
 num_workers = 0
 
+#class RunnerConfig:
+#    def __init__():
+
 def controller():
     import cv2
     import time
     import tensorflow as tf
-    import numpy as np
+    import numpy as numpy
 
-    from multiprocessing import Pool, Queue, Process
-
+    from multiprocessing import Pool, Queue, Process, cpu_count, Value
+    counter = Value("i", 0)
     gpus= tf.config.experimental.list_physical_devices('GPU')
     tf.config.experimental.set_memory_growth(gpus[0], True)
 
@@ -96,43 +99,77 @@ def controller():
     BATCH_SIZE = 32
     LEARNING_RATE = 0.000001
 
-    runs = 10
-    number_of_workers = 1
+    runs = 100
+    number_of_workers = 4#cpu_count() - 2# - 2 is 1 for learning, 1 is for memory
     game_wrapper = GameWrapper(ENV_NAME, MAX_NOOP_STEPS)
     target_network = build_q_network(game_wrapper.env.action_space.n)
     network = build_q_network(game_wrapper.env.action_space.n)
     v_network = build_v_network()
     per_workers = runs // number_of_workers
-    workers = []
-    memory_line = []
-    memory_buffer = ReplayBuffer(size=10000)
+    memory_buffer = ReplayBuffer(size=100000)
+    agent = LearnerAgent(network, target_network, v_network, game_wrapper.env.action_space.n)
 
-    for i in range(0, number_of_workers):
-        q = Queue()
-        p = Process(target=runner, \
-            args=(target_network.get_weights(), network.get_weights(), v_network.get_weights(),per_workers,q) \
-            )
-        p.start()
-        workers.append(p)
-        memory_line.append(q)
-    total_joined = 0
-    done = False
-    while not done:
+    collected_memories = 0
+    while True:
+        workers = []
+        memory_line = []
         for i in range(0, number_of_workers):
-            if total_joined == len(workers):
-                done = True
-                break
-            try:
-                memory = memory_line[i].get(block=False)
-                memory_buffer.add_experience(memory)
-                if not workers[i].is_alive:
-                    workers[i].join()
-                    total_joined += 1
-            except Exception as e:
-                continue
+            q = Queue()
+            counter.value += 1
+            p = Process(target=runner, \
+                args=(agent.target_dqn.get_weights(), agent.DQN.get_weights(), agent.v_network.get_weights(),per_workers,q, counter) \
+                )
+            p.start()
+            workers.append(p)
+            memory_line.append(q)
+        total_joined = 0
+        workers_done = False
+        while not workers_done:
+            for i in range(0, number_of_workers):
+                if counter.value == 0:
+                        workers_done = True
+                        break
+                try:
+                    memory = memory_line[i].get(block=False)
+                    collected_memories += 1
+                    memory_buffer.add_experience(memory)
+                except Exception as e:
+                    #print(repr(e))
+                    continue
+        for i in range(0, number_of_workers):
+            workers[i].join()
+        if memory_buffer.faux_len() > MIN_REPLAY_BUFFER_SIZE:
+            agent.learn(BATCH_SIZE, gamma, collected_memories)
+            agent.update_target_network()
+
     print(memory_buffer.faux_len())
 
-def runner(network_weights, target_network_weights, v_network_weights, runs, q):
+def memory_thread(from_runner_thread, from_learner_thread, to_learner_thread):
+    from replay_buffer import ReplayBuffer
+    replay_buffer = ReplayBuffer(size=MEM_SIZE)
+    while True:
+        try:
+            new_memory = from_learner_thread.get(block=False)
+            replay_buffer.add_experience(new_memory)
+        except Exception as e:
+            noop()
+        try:
+            request = from_learner_thread.get(block=False)
+            if request:
+                mini_batch = replay_buffer.get_minibatch()
+                to_learner_thread.put(mini_batch)
+        except Exception as e:
+            noop()
+
+def learner_thread(agent, to_memory_thread, from_memory_thread):
+    to_memory_thread.put(True)
+    (next_batch, frame_number) = from_memory_thread.get()
+    while True:
+        to_memory_thread.put(True)
+        agent.learn(next_batch)
+        (next_batch, frame_number) = from_memory_thread.get()
+    
+def runner(network_weights, target_network_weights, v_network_weights, runs, q, counter):
     import cv2
     import time
     import tensorflow as tf
@@ -171,9 +208,10 @@ def runner(network_weights, target_network_weights, v_network_weights, runs, q):
         while not terminal:
             action = agent.get_action(frame_number, game_wrapper.state)
             processed_frame, reward, terminal, life_lost = game_wrapper.step(action)
-            a_memory = Memory(action, processed_frame, reward, terminal, True)
+            a_memory = Memory(action, processed_frame[:,:, 0], reward, terminal, True)
             q.put(a_memory)
             frame_number+=1
+    counter.value -= 1
 
 if __name__ == '__main__':
     from multiprocessing import Pool, Queue, Process

@@ -26,6 +26,8 @@ class ReplayBuffer:
     
     def add_experience(self, memory):
         if memory.frame.shape != self.input_shape:
+            print(memory.frame.shape)
+            print(self.input_shape)
             raise ValueError('Dimensions of frame is wrong')
         if memory.clip_reward:
             reward = np.sign(memory.reward)
