@@ -1,6 +1,7 @@
 import os
 import random
 import numpy as np
+from multiprocessing import Lock
 class Memory:
     def __init__(self, action, frame, reward, terminal, clip_reward=True):
         self.action = action
@@ -21,10 +22,14 @@ class ReplayBuffer:
         self.frames = np.empty((self.size, self.input_shape[0], self.input_shape[1]),dtype=np.uint8)
         self.terminal_flags = np.empty(self.size, dtype=np.bool)
         self.priorities = np.zeros(self.size, dtype=np.float32)
+        self.read_lock = Lock()
+        self.write_lock = Lock()
+        self.read_counter = 0
 
         self.use_per = use_per
     
     def add_experience(self, memory):
+        self.write_lock.acquire()
         if memory.frame.shape != self.input_shape:
             print(memory.frame.shape)
             print(self.input_shape)
@@ -38,9 +43,11 @@ class ReplayBuffer:
         self.priorities[self.current] = max(self.priorities.max(), 1)
         self.count = max(self.count, self.current + 1)
         self.current = (self.current + 1) % self.size
+        self.write_lock.release()
     
     def get_minibatch(self, batch_size=32, priority_scale=0.0):
         if self.count < self.history_length:
+            self.write_lock.release()
             raise ValueError('Not enough memories to get a mini batch')
         if self.use_per:
             scaled_priorities = self.priorities[self.history_length:self.count-1] ** priority_scale
@@ -70,9 +77,12 @@ class ReplayBuffer:
         if self.use_per:
             importance = 1 / self.count * 1 / sample_probabilities[[index - 4 for index in indices]]
             importance = importance / importance.max()
-            return (states, self.actions[indices], self.rewards[indices], new_states, self.terminal_flags[indices]), importance, indices
+            package = ((states, self.actions[indices], self.rewards[indices], new_states, self.terminal_flags[indices]), importance, indices)
+            return package
         else:
-            return states, self.actions[indices], self.rewards[indices], new_states, self.terminal_flags[indices]
+            package = (states, self.actions[indices], self.rewards[indices], new_states, self.terminal_flags[indices])
+
+            return package
     
     def set_priorities(self, indices, errors, offset=0.1):
         for i, e in zip(indices, errors):

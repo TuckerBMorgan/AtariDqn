@@ -2,7 +2,7 @@ import numpy as np
 import random
 import gym
 
-from process_frame import process_frame
+from utils import process_frame
 
 class GameWrapper:
     def __init__(self, env_name, no_op_steps=10, history_length=4):
